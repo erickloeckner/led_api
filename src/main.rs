@@ -141,10 +141,6 @@ fn hsv_interp(col1: &ColorHsv, col2: &ColorHsv, pos: f32) -> ColorHsv {
 }
 
 fn hsv_interp_3(col1: &ColorHsv, col2: &ColorHsv, col3: &ColorHsv, pos: f32) -> ColorHsv {
-    //let mut h_out = 0.0;
-    //let mut s_out = 0.0;
-    //let mut v_out = 0.0;
-    
     if pos > 0.0 {
         let h_range = col1.h - col2.h;
         let s_range = col1.s - col2.s;
@@ -172,8 +168,6 @@ fn hsv_interp_3(col1: &ColorHsv, col2: &ColorHsv, col3: &ColorHsv, pos: f32) -> 
 
         ColorHsv { h: h_out, s: s_out, v: v_out }
     }
-    
-    //ColorHsv { h: h_out, s: s_out, v: v_out }
 }
 
 fn triangle(pos: f32, phs: f32) -> f32 {
@@ -219,17 +213,11 @@ fn main() {
         let led_count: usize = 12;
         
         let mut leds_1 = Vec::with_capacity(led_count);
-        //~ leds_1.push(Pixel { r: 63, g: 0, b: 0 });
-        //~ leds_1.push(Pixel { r: 0, g: 63, b: 0 });
-        //~ leds_1.push(Pixel { r: 0, g: 0, b: 63 });
         for _i in 0..led_count {
             leds_1.push(Pixel { r: 0, g: 0, b: 0 });
         }
 
         let mut leds_off = Vec::with_capacity(led_count);
-        //~ leds_off.push(Pixel { r: 0, g: 0, b: 0 });
-        //~ leds_off.push(Pixel { r: 0, g: 0, b: 0 });
-        //~ leds_off.push(Pixel { r: 0, g: 0, b: 0 });
         for _i in 0..led_count {
             leds_off.push(Pixel { r: 0, g: 0, b: 0 });
         }
@@ -258,16 +246,6 @@ fn main() {
                             pattern = msg.pattern;
                         }
                         1 => {
-                            //~ leds_1[0] = hsv_2_rgb(&msg.color1);
-                            //~ leds_1[1] = hsv_2_rgb(&msg.color2);
-                            //~ leds_1[2] = hsv_2_rgb(&msg.color3);
-                            //~ leds_1[3] = hsv_2_rgb(&msg.color1);
-                            //~ leds_1[4] = hsv_2_rgb(&msg.color2);
-                            //~ leds_1[5] = hsv_2_rgb(&msg.color3);
-                            //~ leds_1[6] = hsv_2_rgb(&msg.color1);
-                            //~ leds_1[7] = hsv_2_rgb(&msg.color2);
-                            //~ leds_1[8] = hsv_2_rgb(&msg.color3);
-                            
                             color1 = msg.color1;
                             color2 = msg.color2;
                             color3 = msg.color3;
@@ -316,26 +294,6 @@ fn main() {
                 1 => {
                     for (i, led) in leds_1.iter_mut().enumerate() {
                         let pos = (i as f32) / ((led_count - 1) as f32);
-                        /*
-                        if pos <= 0.25 || pos >= 0.75 {
-                            *led = hsv_2_rgb(&hsv_interp(&color2, &color1, triangle(0.0 + offset, pos)));
-                            //~ *led = Pixel { r: 0, g: 0, b: 0 };
-                        } else {
-                            *led = hsv_2_rgb(&hsv_interp(&color3, &color1, triangle(1.0 - offset, -pos)));
-                            //~ *led = Pixel { r: 0, g: 0, b: 0 };
-                        }
-                        */
-                        
-                        /*
-                        if pos < 0.5 {
-                            //~ *led = hsv_2_rgb(&hsv_interp(&color1, &color2, triangle(0.0 + offset, (pos + 0.75).rem_euclid(1.0))));
-                            *led = Pixel { r: 0, g: 0, b: 0 };
-                        } else {
-                            *led = hsv_2_rgb(&hsv_interp(&color3, &color1, triangle(0.0 + offset, (pos + 0.75).rem_euclid(1.0)) * -1.0));
-                            //~ *led = Pixel { r: 0, g: 0, b: 0 };
-                        }
-                        */
-                        
                         *led = hsv_2_rgb(&hsv_interp_3(&color1, &color2, &color3, triangle(0.0 + offset, pos)));
                     }
                     write_leds(&mut spidev, &leds_1, 0);
@@ -360,11 +318,6 @@ fn main() {
             }
             //~ sleep(Duration::from_secs_f32(loop_time / 1000.0));
         }
-        //write_leds(&mut spidev, &leds_1);
-        
-        //loop {
-        //    println!("{}", rx.recv().unwrap());
-        //}
     });
 
     rocket::ignite().manage(LedSender { sender: tx }).mount("/", routes![index, set]).launch();
