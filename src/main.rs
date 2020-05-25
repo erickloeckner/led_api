@@ -182,11 +182,6 @@ fn triangle(pos: f32, phs: f32) -> f32 {
 
 #[get("/")]
 fn index() -> &'static str {
-    //~ led_sender.sender.send(LedState {
-        //~ color1: Pixel { r: 63, g: 0, b: 0 },
-        //~ color2: Pixel { r: 0, g: 63, b: 0 },
-        //~ color3: Pixel { r: 0, g: 0, b: 63 },
-        //~ pattern: 1 }).unwrap();
     "foo bar"
 }
 
