@@ -45,23 +45,16 @@ struct Pixel {
     b: u8,
 }
 
-/*
-struct ColorRgb {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-*/
-
 struct ColorHsv {
     h: f32,
     s: f32,
     v: f32,
 }
 
-//~ struct EventLoop {
-    //~ inst: Instant,
-//~ }
+struct Sprite {
+    pos: f32,
+    falloff: f32,
+}
 
 fn write_leds(spi: &mut Spidev, leds: &Vec<Pixel>, offset: usize) {
     let mut tmp = Vec::new();
@@ -91,8 +84,9 @@ fn write_leds(spi: &mut Spidev, leds: &Vec<Pixel>, offset: usize) {
 }
 
 fn hsv_2_rgb(col: &ColorHsv) -> Pixel {
+    let h_wrap = col.h.rem_euclid(1.0);
     let mut out = Pixel { r: 0, g: 0, b: 0 };
-    match (col.h * 6.0).trunc() as u8 {
+    match (h_wrap * 6.0).trunc() as u8 {
         0 => {
             out.r = (col.v * 255.0) as u8;
             out.g = ((col.v * (1.0 - col.s * (1.0 - ((col.h * 6.0) - ((col.h * 6.0).trunc()))))) * 255.0) as u8;
@@ -230,9 +224,11 @@ fn main() {
         let loop_time: f32 = 16.6666;
         let mut pattern: u8 = 0;
         
-        let mut color1 = ColorHsv {h: 0.0, s: 0.0, v: 0.0 };
-        let mut color2 = ColorHsv {h: 0.0, s: 0.0, v: 0.0 };
-        let mut color3 = ColorHsv {h: 0.0, s: 0.0, v: 0.0 };
+        let mut color1 = ColorHsv { h: 0.0, s: 0.0, v: 0.0 };
+        let mut color2 = ColorHsv { h: 0.0, s: 0.0, v: 0.0 };
+        let mut color3 = ColorHsv { h: 0.0, s: 0.0, v: 0.0 };
+        
+        let mut scanner = Sprite { pos: 0.0, falloff: 6.0 };
 
         loop {
             let loop_start = Instant::now();
@@ -249,39 +245,33 @@ fn main() {
                             color1 = msg.color1;
                             color2 = msg.color2;
                             color3 = msg.color3;
+                            pattern = msg.pattern;
                                 
                             for (i, led) in leds_1.iter_mut().enumerate() {
-                                
                                 let pos = (i as f32) / ((led_count - 1) as f32);
-                                //~ if pos < 0.5 {
-                                    //~ *led = hsv_2_rgb(&hsv_interp(&msg.color1, &msg.color2, pos * 2.0));
-                                //~ } else {
-                                    //~ *led = hsv_2_rgb(&hsv_interp(&msg.color2, &msg.color3, pos * 2.0 - 1.0));
-                                //~ }
-                                
-                                //~ if pos < 0.3333334 {
-                                    //~ *led = hsv_2_rgb(&hsv_interp(&msg.color1, &msg.color2, pos * 3.0));
-                                //~ } else if pos > 0.33333334 && pos < 0.66666667 {
-                                    //~ *led = hsv_2_rgb(&hsv_interp(&msg.color2, &msg.color3, pos * 3.0 - 1.0));
-                                //~ } else {
-                                    //~ *led = hsv_2_rgb(&hsv_interp(&msg.color3, &msg.color1, pos * 3.0 - 2.0));
-                                //~ }
-                                
-                                /*
-                                if pos <= 0.25 || pos >= 0.75 {
-                                    *led = hsv_2_rgb(&hsv_interp(&color2, &color1, triangle(0.0 + offset, pos)));
-                                    //~ *led = Pixel { r: 0, g: 0, b: 0 };
-                                } else {
-                                    *led = hsv_2_rgb(&hsv_interp(&color3, &color1, triangle(1.0 - offset, -pos)));
-                                    //~ *led = Pixel { r: 0, g: 0, b: 0 };
-                                }
-                                */
-                                
                                 *led = hsv_2_rgb(&hsv_interp_3(&color1, &color2, &color3, triangle(0.0 + offset, pos)));
                             }
                             
                             write_leds(&mut spidev, &leds_1, 0);
+                        }
+                        2 => {
+                            color1 = msg.color1;
+                            color2 = msg.color2;
+                            color3 = msg.color3;
                             pattern = msg.pattern;
+                                
+                            scanner.pos = (triangle(offset, 0.0) + 1.0) * 0.5;
+                    
+                            for (i, led) in leds_1.iter_mut().enumerate() {
+                                let pos = (i as f32) / ((led_count - 1) as f32);
+                                let delta = (pos - scanner.pos).abs();
+                                
+                                let col_interp = hsv_interp(&color1, &color2, pos);
+                                
+                                *led = hsv_2_rgb(&hsv_interp(&color3, &col_interp, delta));
+                            }
+                            
+                            write_leds(&mut spidev, &leds_1, 0);
                         }
                         _ => (),
                     }
@@ -296,6 +286,21 @@ fn main() {
                         let pos = (i as f32) / ((led_count - 1) as f32);
                         *led = hsv_2_rgb(&hsv_interp_3(&color1, &color2, &color3, triangle(0.0 + offset, pos)));
                     }
+                    write_leds(&mut spidev, &leds_1, 0);
+                }
+                2 => {
+                    scanner.pos = (triangle(offset, 0.0) + 1.0) * 0.5;
+                    
+                    for (i, led) in leds_1.iter_mut().enumerate() {
+                        let pos = (i as f32) / ((led_count - 1) as f32);
+                        let delta = (pos - scanner.pos).abs();
+                        let mix = (delta + (delta * scanner.falloff)).min(1.0);
+                        
+                        let col_interp = hsv_interp(&color1, &color2, pos);
+                        
+                        *led = hsv_2_rgb(&hsv_interp(&color3, &col_interp, mix));
+                    }
+                    
                     write_leds(&mut spidev, &leds_1, 0);
                 }
                 _ => (),
