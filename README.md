@@ -1,27 +1,27 @@
 API for controlling addressable LEDs connected to a Raspberry Pi's SPI port/s
 
-#building:
+# building:
 ```
 cargo +nightly build --release
 ```
-##build and restart service:
+## build and restart service:
 ```
 cargo +nightly build --release && systemctl --user restart led-api.service
 ```
 
-#systemd service:
+# systemd service:
 
-##first enable persistent user systemd services:
-
+## first enable persistent user systemd services:
+```
 loginctl enable-linger pi
-
-##create directory and service file:
+```
+## create directory and service file:
 ```
 mkdir -p /home/pi/.config/systemd/user/
 
 touch /home/pi/.config/systemd/user/led-api.service
 ```
-##contents of service file:
+## contents of service file:
 ```
 cat /home/pi/.config/systemd/user/led-api.service
 [Unit]
@@ -34,7 +34,7 @@ ExecStart=/home/pi/rust/led_api/target/release/led_api
 WantedBy=default.target
 ```
 
-##start and enable service:
+## start and enable service:
 ```
 systemctl --user start led-api.service
 
