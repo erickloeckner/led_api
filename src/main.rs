@@ -144,12 +144,15 @@ enum SpriteState {
     Release,
 }
 
-fn write_leds(spi: &mut Spidev, leds: &Vec<Pixel>, offset: usize) {
-    let mut tmp = Vec::new();
+fn write_leds(spi: &mut Spidev, leds: &Vec<Pixel>, buffer: &mut Vec<u8>, offset: usize) {
+    //let mut tmp = Vec::new();
+    //for _i in 0..4 {
+    //    tmp.push(0);
+    //}
+    buffer.clear();
     for _i in 0..4 {
-        tmp.push(0);
+        buffer.push(0);
     }
-    
     //~ for led in leds.iter() {
         //~ tmp.push(255);
         //~ tmp.push(led.b);
@@ -159,16 +162,22 @@ fn write_leds(spi: &mut Spidev, leds: &Vec<Pixel>, offset: usize) {
     
     for i in offset..(offset + leds.len()) {
         let i_wrap = i % leds.len();
-        tmp.push(255);
-        tmp.push(leds[i_wrap].b);
-        tmp.push(leds[i_wrap].g);
-        tmp.push(leds[i_wrap].r);
+        //tmp.push(255);
+        //tmp.push(leds[i_wrap].b);
+        //tmp.push(leds[i_wrap].g);
+        //tmp.push(leds[i_wrap].r);
+        buffer.push(255);
+        buffer.push(leds[i_wrap].b);
+        buffer.push(leds[i_wrap].g);
+        buffer.push(leds[i_wrap].r);
     }
     
     for _i in 0..8 {
-        tmp.push(0);
+        //tmp.push(0);
+        buffer.push(0);
     }
-    spi.write(&tmp[..]).unwrap();
+    //spi.write(&tmp[..]).unwrap();
+    spi.write(&buffer[..]).unwrap();
 }
 
 fn hsv_2_rgb(col: &ColorHsv) -> Pixel {
@@ -304,6 +313,8 @@ fn main() {
         for _i in 0..led_count {
             leds_off.push(Pixel { r: 0, g: 0, b: 0 });
         }
+
+        let mut buffer = Vec::with_capacity(1024);
         
         let mut offset: f32 = 0.0;
         let offset_inc = 0.0005;
@@ -346,7 +357,7 @@ fn main() {
                 Ok(msg) => {
                     match msg.pattern {
                         0 => {
-                            write_leds(&mut spidev, &leds_off, 0);
+                            write_leds(&mut spidev, &leds_off, &mut buffer, 0);
                             pattern = msg.pattern;
                         }
                         1 => {
@@ -430,7 +441,7 @@ fn main() {
                         let pos = (i as f32) / ((led_count - 1) as f32);
                         *led = hsv_2_rgb(&hsv_interp_3(&color1, &color2, &color3, triangle(0.0 + offset, pos)));
                     }
-                    write_leds(&mut spidev, &leds_1, 0);
+                    write_leds(&mut spidev, &leds_1, &mut buffer, 0);
                 }
                 2 => {
                     scanner.pos = (triangle(offset, 0.0) + 1.0) * 0.5;
@@ -445,7 +456,7 @@ fn main() {
                         *led = hsv_2_rgb(&hsv_interp(&color3, &col_interp, mix));
                     }
                     
-                    write_leds(&mut spidev, &leds_1, 0);
+                    write_leds(&mut spidev, &leds_1, &mut buffer, 0);
                 }
                 3 => {
                     /*
@@ -495,7 +506,7 @@ fn main() {
                         *led = hsv_2_rgb(&hsv_interp(&col_interp, &color3, mix_total));
                     }
                     
-                    write_leds(&mut spidev, &leds_1, 0);
+                    write_leds(&mut spidev, &leds_1, &mut buffer, 0);
                 }
                 _ => (),
             }
