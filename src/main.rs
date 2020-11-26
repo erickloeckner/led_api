@@ -6,14 +6,18 @@
 #[macro_use] extern crate rocket;
 
 use std::io::prelude::*;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
+use std::{env, fs, process};
 
 use rand::Rng;
 use rocket::request::Form;
 use rocket::State;
 use spidev::{Spidev, SpidevOptions, SpiModeFlags};
+
+use serde_derive::Deserialize;
 
 struct LedSender {
     sender: SyncSender<LedState>,
@@ -73,6 +77,7 @@ struct SpriteEnvelope {
     release: f32,
     timer: f32,
     level: f32,
+    mix: f32,
 }
 
 impl SpriteEnvelope {
@@ -87,15 +92,12 @@ impl SpriteEnvelope {
             release: 1000.0,
             timer: 0.0,
             level: 0.0,
+            mix: 0.0,
         }
     }
     
     fn run(&mut self, dt: f32) {
         if self.live {
-            //~ self.timer = (self.timer - dt).max(0.0);
-            //~ if self.timer <= 0.0 {
-                //~ self.live = false;
-            //~ }
             match self.state {
                 SpriteState::Attack => {
                     self.timer = self.timer + dt;
@@ -138,6 +140,24 @@ impl SpriteEnvelope {
     }
 }
 
+#[derive(Deserialize)]
+struct Config {
+    main: Main,
+    rand: Rand,
+}
+
+#[derive(Deserialize)]
+struct Main {
+    led_count: usize,
+    brightness: f32,
+}
+
+#[derive(Deserialize)]
+struct Rand {
+    count: usize,
+    falloff: f32,
+}
+
 enum SpriteState {
     Attack,
     Sustain,
@@ -145,38 +165,22 @@ enum SpriteState {
 }
 
 fn write_leds(spi: &mut Spidev, leds: &Vec<Pixel>, buffer: &mut Vec<u8>, offset: usize) {
-    //let mut tmp = Vec::new();
-    //for _i in 0..4 {
-    //    tmp.push(0);
-    //}
     buffer.clear();
     for _i in 0..4 {
         buffer.push(0);
     }
-    //~ for led in leds.iter() {
-        //~ tmp.push(255);
-        //~ tmp.push(led.b);
-        //~ tmp.push(led.g);
-        //~ tmp.push(led.r);
-    //~ }
     
     for i in offset..(offset + leds.len()) {
         let i_wrap = i % leds.len();
-        //tmp.push(255);
-        //tmp.push(leds[i_wrap].b);
-        //tmp.push(leds[i_wrap].g);
-        //tmp.push(leds[i_wrap].r);
         buffer.push(255);
         buffer.push(leds[i_wrap].b);
         buffer.push(leds[i_wrap].g);
         buffer.push(leds[i_wrap].r);
     }
     
-    for _i in 0..8 {
-        //tmp.push(0);
+    for _i in 0..((leds.len() + 1) / 2) {
         buffer.push(0);
     }
-    //spi.write(&tmp[..]).unwrap();
     spi.write(&buffer[..]).unwrap();
 }
 
@@ -270,28 +274,54 @@ fn index() -> &'static str {
     "foo bar"
 }
 
-/*
-#[get("/off")]
-fn off(led_sender: State<LedSender>) {
-    //~ led_sender.sender.send(LedState {
-        //~ color1: Pixel { r: 63, g: 0, b: 0 },
-        //~ color2: Pixel { r: 0, g: 63, b: 0 },
-        //~ color3: Pixel { r: 0, g: 0, b: 63 },
-        //~ pattern: 0 }).unwrap();
+#[get("/get")]
+fn get(leds: State<Arc<Mutex<LedState>>>) -> String {
+    let leds_data = leds.lock().unwrap();
+    format!("{},{},{},{},{},{},{},{},{},{}",
+        leds_data.color1.h, leds_data.color1.s, leds_data.color1.v, 
+        leds_data.color2.h, leds_data.color2.s, leds_data.color2.v,
+        leds_data.color3.h, leds_data.color3.s, leds_data.color3.v,
+        leds_data.pattern,
+    )
 }
-*/
 
 #[post("/set", data = "<data>")]
-fn set(led_sender: State<LedSender>, data: Form<LedStateData>) {
+fn set(led_sender: State<LedSender>, data: Form<LedStateData>, state: State<Arc<Mutex<LedState>>>) {
     led_sender.sender.send(LedState {
         color1: ColorHsv { h: data.color1_h, s: data.color1_s, v: data.color1_v },
         color2: ColorHsv { h: data.color2_h, s: data.color2_s, v: data.color2_v },
         color3: ColorHsv { h: data.color3_h, s: data.color3_s, v: data.color3_v },
         pattern: data.pattern }).unwrap();
+    let mut state_data = state.lock().unwrap();
+    state_data.color1 = ColorHsv { h: data.color1_h, s: data.color1_s, v: data.color1_v };
+    state_data.color2 = ColorHsv { h: data.color2_h, s: data.color2_s, v: data.color2_v };
+    state_data.color3 = ColorHsv { h: data.color3_h, s: data.color3_s, v: data.color3_v };
+    state_data.pattern = data.pattern;
 }
 
 fn main() {
+    let config_path = env::args().nth(1).unwrap_or_else(|| {
+        println!("no config file specified");
+        process::exit(1);
+    });
+    let config_raw = fs::read_to_string(&config_path).unwrap_or_else(|err| {
+        println!("error reading config: {}", err);
+        process::exit(1);
+    });
+    let config: Config = toml::from_str(&config_raw).unwrap_or_else(|err| {
+        println!("error parsing config: {}", err);
+        process::exit(1);
+    });
+    
     let (tx, rx): (SyncSender<LedState>, Receiver<LedState>) = sync_channel(1);
+    
+    let led_state = Arc::new(Mutex::new(LedState {
+        color1: ColorHsv { h: 0.0, s: 0.0, v: 0.0 },
+        color2: ColorHsv { h: 0.0, s: 0.0, v: 0.0 },
+        color3: ColorHsv { h: 0.0, s: 0.0, v: 0.0 },
+        pattern: 0,
+    }));
+    
     thread::spawn(move || {
         let mut spidev = Spidev::open("/dev/spidev0.0").unwrap();
         let options = SpidevOptions::new()
@@ -301,16 +331,13 @@ fn main() {
             .build();
         spidev.configure(&options).unwrap();
 
-        let led_count: usize = 100;
-        let sprites_random_count: usize = 20;
-        
-        let mut leds_1 = Vec::with_capacity(led_count);
-        for _i in 0..led_count {
+        let mut leds_1 = Vec::with_capacity(config.main.led_count);
+        for _i in 0..config.main.led_count {
             leds_1.push(Pixel { r: 0, g: 0, b: 0 });
         }
 
-        let mut leds_off = Vec::with_capacity(led_count);
-        for _i in 0..led_count {
+        let mut leds_off = Vec::with_capacity(config.main.led_count);
+        for _i in 0..config.main.led_count {
             leds_off.push(Pixel { r: 0, g: 0, b: 0 });
         }
 
@@ -318,12 +345,9 @@ fn main() {
         
         let mut offset: f32 = 0.0;
         let offset_inc = 0.0005;
-        //~ let mut offset_count: u8 = 0;
-        //~ let offset_frames: u8 = 5;
         
         let loop_time: f32 = 16.6666;
         let mut pattern: u8 = 0;
-        let max_brightness: f32 = 0.5;
         
         let mut rng = rand::thread_rng();
         
@@ -332,20 +356,15 @@ fn main() {
         let mut color3 = ColorHsv { h: 0.0, s: 0.0, v: 0.0 };
         
         let mut scanner = Sprite { pos: 0.0, falloff: 10.0 };
-        let mut sprite_random = SpriteEnvelope::new();
-        sprite_random.falloff = 20.0;
-        sprite_random.attack = 500.0;
-        sprite_random.sustain = 250.0;
-        sprite_random.release = 500.0;
         
-        let mut sprites_random = Vec::with_capacity(sprites_random_count);
-        for _i in 0..sprites_random_count {
+        let mut sprites_random = Vec::with_capacity(config.rand.count);
+        for _i in 0..config.rand.count {
             let mut sprite = SpriteEnvelope::new();
             sprite.pos = rng.gen();
-            sprite.falloff = 100.0;
-            sprite.attack = rng.gen::<f32>() * 500.0 + 500.0;
-            sprite.sustain = 500.0;
-            sprite.release = rng.gen::<f32>() * 500.0 + 500.0;
+            sprite.falloff = config.rand.falloff;
+            sprite.attack = rng.gen::<f32>() * 1000.0 + 1000.0;
+            sprite.sustain = 2000.0;
+            sprite.release = rng.gen::<f32>() * 1000.0 + 1000.0;
             sprites_random.push(sprite);
         }
 
@@ -365,68 +384,54 @@ fn main() {
                             color2 = msg.color2;
                             color3 = msg.color3;
                             pattern = msg.pattern;
-                            
-                            color1.set_brightness(max_brightness);
-                            color2.set_brightness(max_brightness);
-                            color3.set_brightness(max_brightness);
-                                
-                            //~ for (i, led) in leds_1.iter_mut().enumerate() {
-                                //~ let pos = (i as f32) / ((led_count - 1) as f32);
-                                //~ *led = hsv_2_rgb(&hsv_interp_3(&color1, &color2, &color3, triangle(0.0 + offset, pos)));
-                            //~ }
-                            
-                            //~ write_leds(&mut spidev, &leds_1, 0);
+                            color1.set_brightness(config.main.brightness);
+                            color2.set_brightness(config.main.brightness);
+                            color3.set_brightness(config.main.brightness);
                         }
                         2 => {
                             color1 = msg.color1;
                             color2 = msg.color2;
                             color3 = msg.color3;
                             pattern = msg.pattern;
-                            
-                            color1.set_brightness(max_brightness);
-                            color2.set_brightness(max_brightness);
-                            color3.set_brightness(max_brightness);
-                                
-                            //~ scanner.pos = (triangle(offset, 0.0) + 1.0) * 0.5;
-                    
-                            //~ for (i, led) in leds_1.iter_mut().enumerate() {
-                                //~ let pos = (i as f32) / ((led_count - 1) as f32);
-                                //~ let delta = (pos - scanner.pos).abs();
-                                //~ let mix = (delta + (delta * scanner.falloff)).min(1.0);
-                                
-                                //~ let col_interp = hsv_interp(&color1, &color2, pos);
-                                
-                                //~ *led = hsv_2_rgb(&hsv_interp(&color3, &col_interp, mix));
-                            //~ }
-                            
-                            //~ write_leds(&mut spidev, &leds_1, 0);
+                            color1.set_brightness(config.main.brightness);
+                            color2.set_brightness(config.main.brightness);
+                            color3.set_brightness(config.main.brightness);   
                         }
                         3 => {
                             color1 = msg.color1;
                             color2 = msg.color2;
                             color3 = msg.color3;
                             pattern = msg.pattern;
-                            
-                            color1.set_brightness(max_brightness);
-                            color2.set_brightness(max_brightness);
-                            color3.set_brightness(max_brightness);
-                            
-                            sprite_random.pos = rng.gen();
+                            color1.set_brightness(config.main.brightness);
+                            color2.set_brightness(config.main.brightness);
+                            color3.set_brightness(config.main.brightness);
+                            //sprite_random.pos = rng.gen();
                             for i in sprites_random.iter_mut() {
                                 i.pos = rng.gen();
                             }
-                            
-                            //~ for (i, led) in leds_1.iter_mut().enumerate() {
-                                //~ let pos = (i as f32) / ((led_count - 1) as f32);
-                                //~ let delta = (pos - sprite_random.pos).abs();
-                                //~ let mix = (delta + (delta * sprite_random.falloff)).min(1.0);
-                                
-                                //~ let col_interp = hsv_interp(&color1, &color2, pos);
-                                
-                                //~ *led = hsv_2_rgb(&hsv_interp(&color3, &col_interp, mix + (1.0 - sprite_random.level)));
-                            //~ }
-                            
-                            //~ write_leds(&mut spidev, &leds_1, 0);
+                        }
+                        4 => {
+                            color1 = msg.color1;
+                            color2 = msg.color2;
+                            color3 = msg.color3;
+                            pattern = msg.pattern;
+                            color1.set_brightness(config.main.brightness);
+                            color2.set_brightness(config.main.brightness);
+                            color3.set_brightness(config.main.brightness);
+                            //~ sprite_random.pos = rng.gen();
+                            for i in sprites_random.iter_mut() {
+                                i.pos = rng.gen();
+                                i.mix = rng.gen();
+                            }
+                        }
+                        5 => {
+                            color1 = msg.color1;
+                            color2 = msg.color2;
+                            color3 = msg.color3;
+                            pattern = msg.pattern;
+                            color1.set_brightness(config.main.brightness);
+                            color2.set_brightness(config.main.brightness);
+                            color3.set_brightness(config.main.brightness);
                         }
                         _ => (),
                     }
@@ -438,7 +443,7 @@ fn main() {
                 0 => (),
                 1 => {
                     for (i, led) in leds_1.iter_mut().enumerate() {
-                        let pos = (i as f32) / ((led_count - 1) as f32);
+                        let pos = (i as f32) / ((config.main.led_count - 1) as f32);
                         *led = hsv_2_rgb(&hsv_interp_3(&color1, &color2, &color3, triangle(0.0 + offset, pos)));
                     }
                     write_leds(&mut spidev, &leds_1, &mut buffer, 0);
@@ -447,7 +452,7 @@ fn main() {
                     scanner.pos = (triangle(offset, 0.0) + 1.0) * 0.5;
                     
                     for (i, led) in leds_1.iter_mut().enumerate() {
-                        let pos = (i as f32) / ((led_count - 1) as f32);
+                        let pos = (i as f32) / ((config.main.led_count - 1) as f32);
                         let delta = (pos - scanner.pos).abs();
                         let mix = (delta + (delta * scanner.falloff)).min(1.0);
                         
@@ -458,42 +463,20 @@ fn main() {
                     
                     write_leds(&mut spidev, &leds_1, &mut buffer, 0);
                 }
-                3 => {
-                    /*
-                    if sprite_random.live == false {
-                        sprite_random.pos = rng.gen();
-                        sprite_random.reset();
-                        //~ sprite_random.live = true;
-                        //~ sprite_random.state = SpriteState::Attack;
-                        //~ sprite_random.timer = 0.0;
-                        //~ sprite_random.level = 0.0;
-                    }
-                    sprite_random.run(loop_time);
-                    */
-                    
+                3 => {                    
                     for i in sprites_random.iter_mut() {
                         if i.live == false {
                             i.pos = rng.gen();
                             i.reset();
-                            i.attack = rng.gen::<f32>() * 500.0 + 500.0;
+                            i.attack = rng.gen::<f32>() * 1000.0 + 1000.0;
                             //~ sprite.sustain = 250.0;
-                            i.release = rng.gen::<f32>() * 500.0 + 500.0;
+                            i.release = rng.gen::<f32>() * 1000.0 + 1000.0;
                         }
                         i.run(loop_time);
                     }
                     
-                    //~ for (i, led) in leds_1.iter_mut().enumerate() {
-                        //~ let pos = (i as f32) / ((led_count - 1) as f32);
-                        //~ let delta = (pos - sprite_random.pos).abs();
-                        //~ let mix = (delta * sprite_random.falloff).min(1.0);
-                        
-                        //~ let col_interp = hsv_interp(&color1, &color2, pos);
-                        
-                        //~ *led = hsv_2_rgb(&hsv_interp(&color3, &col_interp, mix + (1.0 - sprite_random.level)));
-                    //~ }
-                    
                     for (i, led) in leds_1.iter_mut().enumerate() {
-                        let pos = (i as f32) / ((led_count - 1) as f32);
+                        let pos = (i as f32) / ((config.main.led_count - 1) as f32);
                         let col_interp = hsv_interp(&color1, &color2, pos);
                         let mut mix_total = 0.0;
                         
@@ -508,17 +491,59 @@ fn main() {
                     
                     write_leds(&mut spidev, &leds_1, &mut buffer, 0);
                 }
+                4 => {
+                    for i in sprites_random.iter_mut() {
+                        if i.live == false {
+                            i.pos = rng.gen();
+                            i.reset();
+                            i.attack = rng.gen::<f32>() * 1000.0 + 1000.0;
+                            //~ sprite.sustain = 250.0;
+                            i.release = rng.gen::<f32>() * 1000.0 + 1000.0;
+                            i.mix = rng.gen::<f32>();
+                        }
+                        i.run(loop_time);
+                    }
+                    
+                    for (i, led) in leds_1.iter_mut().enumerate() {
+                        let pos = (i as f32) / ((config.main.led_count - 1) as f32);
+                        let mut mix_total = 0.0;
+                        let mut mix_max = 0.0;
+                        let mut index_max: usize = 0;
+                        //~ let mut col_interp = ColorHsv { h: 0.0, s: 0.0, v: 0.0 };
+                        
+                        for (i, sprite) in sprites_random.iter().enumerate() {
+                            let delta = (pos - sprite.pos).abs();
+                            let mix = (sprite.level - (delta * sprite.falloff)).max(0.0);
+                            mix_total = (mix_total + mix).min(1.0);
+                            
+                            //~ col_interp = hsv_interp(&color2, &color3, sprite.mix);
+                            
+                            if mix_total > mix_max {
+                                mix_max = mix_total;
+                                index_max = i;
+                            }
+                        }
+                        
+                        let col_interp = hsv_interp(&color2, &color3, sprites_random[index_max].mix);
+                        
+                        *led = hsv_2_rgb(&hsv_interp(&color1, &col_interp, mix_total));
+                    }
+                    
+                    write_leds(&mut spidev, &leds_1, &mut buffer, 0);
+                }
+                5 => {
+                    for (i, led) in leds_1.iter_mut().enumerate() {
+                        let pos = (i as f32) / ((config.main.led_count - 1) as f32);
+                        if pos < 0.5 {
+                            *led = hsv_2_rgb(&hsv_interp(&color1, &color2, pos * 2.0));
+                        } else {
+                            *led = hsv_2_rgb(&hsv_interp(&color2, &color3, (pos * 2.0) - 1.0));
+                        }
+                    }
+                    write_leds(&mut spidev, &leds_1, &mut buffer, 0);
+                }
                 _ => (),
             }
-            
-            //~ offset_count += 1;
-            //~ if offset_count >= (offset_frames - 1) {
-                //~ offset_count = 0;
-                //~ offset += 1;
-                //~ if offset > (leds_1.len() - 1) {
-                    //~ offset = 0;
-                //~ }
-            //~ }
             
             offset = (offset + offset_inc).rem_euclid(1.0);
             
@@ -526,9 +551,12 @@ fn main() {
             if (loop_start.elapsed().as_millis() as f32) < loop_time {
                 sleep(Duration::from_secs_f32(loop_time_adj));
             }
-            //~ sleep(Duration::from_secs_f32(loop_time / 1000.0));
         }
     });
 
-    rocket::ignite().manage(LedSender { sender: tx }).mount("/", routes![index, set]).launch();
+    rocket::ignite()
+        .manage(LedSender { sender: tx })
+        .manage(led_state)
+        .mount("/", routes![index, set, get])
+        .launch();
 }

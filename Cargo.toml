@@ -8,5 +8,8 @@ edition = "2018"
 
 [dependencies]
 rand = "0.7.3"
-rocket = "0.4"
+rocket = "0.4.5"
 spidev = "0.4.0"
+toml = "0.5"
+serde = "1.0"
+serde_derive = "1.0"
