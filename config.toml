@@ -1,0 +1,7 @@
+[main]
+led_count = 208
+brightness = 0.65
+
+[rand]
+count = 20
+falloff = 50.0
